@@ -82,18 +82,19 @@ let add (results : ParseResults<_>) =
         Dependencies.Locate().Add(packageName, version, force, hard, interactive, noInstall |> not)
 
 let validateConfig (results : ParseResults<_>) =
-    let args = results.GetResults <@ ConfigArgs.AddCredentials @>
-    args.Length > 0
+    if results.Contains <@ ConfigArgs.AddCredentials @> then
+        let args = results.GetResults <@ ConfigArgs.AddCredentials @>
+        args.Length > 0
+    elif results.Contains <@ ConfigArgs.AddApiToken @> then true
+    else false
 
 let config (results : ParseResults<_>) =
-    let args = results.GetResults <@ ConfigArgs.AddCredentials @>
-    let source = args.Item 0
-    let username =
-        if(args.Length > 1) then
-            args.Item 1
-        else
-            ""
-    Dependencies.Locate().AddCredentials(source, username)
+    match results.GetAllResults() with
+    | [AddCredentials(source)] ->
+        Dependencies.Locate().AddCredentials(source)
+    | [AddApiToken] ->
+        Dependencies.Locate().AddApiToken()
+    | _ -> failwith "bad config arguments"
 
 let validateAutoRestore (results : ParseResults<_>) =
     results.GetAllResults().Length = 1

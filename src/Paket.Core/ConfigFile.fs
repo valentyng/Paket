@@ -14,21 +14,21 @@ open Paket.Utils
 
 let private rootElement = "configuration"
 
-let private getConfigNode (nodeName : string) =
-    let rootNode = 
-        let doc = new XmlDocument()
-        if File.Exists Constants.PaketConfigFile then 
-            try 
-                doc.Load Constants.PaketConfigFile
-                ok doc.DocumentElement
-            with _ -> fail ConfigFileParseError
-        else
-            let element = doc.CreateElement rootElement
-            doc.AppendChild(element) |> ignore
-            ok element
+let private getRootNode () = 
+    let doc = new XmlDocument()
+    if File.Exists Constants.PaketConfigFile then 
+        try 
+            doc.Load Constants.PaketConfigFile
+            ok doc.DocumentElement
+        with _ -> fail ConfigFileParseError
+    else
+        let element = doc.CreateElement rootElement
+        doc.AppendChild(element) |> ignore
+        ok element
 
+let private getConfigNode (nodeName : string) =
     trial {
-        let! root = rootNode
+        let! root = getRootNode ()
         let node = 
             match root |> getNode nodeName with
             | None -> root.OwnerDocument.CreateElement nodeName
@@ -156,6 +156,32 @@ let AddCredentials (source, username, password) = trial {
         | Some credentials -> 
             do! saveConfigNode credentials
         | None -> ()
+    }
+
+let GetApiToken () =
+    let getUserNameAndToken node =
+        let username,token = getAuthFromNode node
+        username,token
+
+    getRootNode()
+    |> returnOrFail
+    |> getNode "token"
+    |> Option.map getUserNameAndToken
+
+let AddApiToken (username, token) = trial {
+    let! tokenNode = getConfigNode "token"
+    let newToken =
+        let _,existingToken = getAuthFromNode tokenNode
+        if existingToken <> token then
+            tokenNode :?> XmlElement |> Some
+        else None
+
+    let newToken = newToken |> Option.map (setCredentials username token)
+
+    match newToken with
+    | Some token -> 
+        do! saveConfigNode token
+    | None -> ()
     }
 
 let askAndAddAuth (source : string) (username : string) = 

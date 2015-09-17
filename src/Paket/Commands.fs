@@ -81,11 +81,13 @@ with
 
 type ConfigArgs =
     | [<CustomCommandLine("add-credentials")>] AddCredentials of string
+    | [<CustomCommandLine("add-apikey")>] AddApiToken
 with
     interface IArgParserTemplate with
         member this.Usage =
             match this with
             | AddCredentials(_) -> "Add credentials for the specified NuGet feed."
+            | AddApiToken -> "Add GitHub Api token."
 
 type ConvertFromNugetArgs =
     | [<AltCommandLine("-f")>] Force
