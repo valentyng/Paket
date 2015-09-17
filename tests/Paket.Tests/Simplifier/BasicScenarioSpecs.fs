@@ -13,7 +13,8 @@ let dummyProjectFile =
     { FileName = ""
       OriginalText = ""
       Document = null
-      ProjectNode = null }
+      ProjectNode = null
+      Language = ProjectLanguage.Unknown }
 
 let lockFile1 = """
 NUGET
@@ -49,9 +50,9 @@ let ``should remove one level deep transitive dependencies from dep and ref file
         failwith (String.concat Environment.NewLine (msgs |> List.map string))
     | Chessie.ErrorHandling.Ok((_,after),_) ->
         let depFile,refFiles = after.DependenciesFile, after.Projects |> List.map snd
-        depFile.Packages |> List.map (fun p -> p.Name) |> shouldEqual [PackageName"A";PackageName"D"]
-        refFiles.Head.NugetPackages |> shouldEqual [PackageInstallSettings.Default("A"); PackageInstallSettings.Default("D")]
-        refFiles.Tail.Head.NugetPackages |> shouldEqual [PackageInstallSettings.Default("B"); PackageInstallSettings.Default("C")]
+        depFile.Groups.[Constants.MainDependencyGroup].Packages |> List.map (fun p -> p.Name) |> shouldEqual [PackageName"A";PackageName"D"]
+        refFiles.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |> shouldEqual [PackageInstallSettings.Default("A"); PackageInstallSettings.Default("D")]
+        refFiles.Tail.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |> shouldEqual [PackageInstallSettings.Default("B"); PackageInstallSettings.Default("C")]
 
 let lockFile2 = """
 NUGET
@@ -92,11 +93,94 @@ let ``should remove all transitive dependencies from dep file recursively``() =
         failwith (String.concat Environment.NewLine (msgs |> List.map string))
     | Chessie.ErrorHandling.Ok((_,after),_) ->
         let depFile,refFiles = after.DependenciesFile, after.Projects |> List.map snd
-        depFile.Packages |> List.map (fun p -> p.Name) |> shouldEqual [PackageName"A";PackageName"C"]
-        refFiles.Head.NugetPackages |>  shouldEqual [PackageInstallSettings.Default("A"); PackageInstallSettings.Default("C")]
-        refFiles.Tail.Head.NugetPackages |>  shouldEqual [PackageInstallSettings.Default("C"); PackageInstallSettings.Default("D")]
+        depFile.Groups.[Constants.MainDependencyGroup].Packages |> List.map (fun p -> p.Name) |> shouldEqual [PackageName"A";PackageName"C"]
+        refFiles.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |>  shouldEqual [PackageInstallSettings.Default("A"); PackageInstallSettings.Default("C")]
+        refFiles.Tail.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |>  shouldEqual [PackageInstallSettings.Default("C"); PackageInstallSettings.Default("D")]
 
-        let expected = """
+        let expected = """source http://nuget.org/api/v2
+
+nuget A 1.0
+nuget C 1.0"""
+
+        depFile.ToString()
+        |> shouldEqual (normalizeLineEndings expected)
+
+
+let lockFile3 = """
+NUGET
+  remote: https://nuget.org/api/v2
+  specs:
+    A (1.0)
+      B (1.0)
+    B (1.0)
+      D (1.0)
+    C (1.0)
+      E (1.0)
+    D (1.0)
+      E (1.0)
+    E (1.0)
+      F (1.0)
+    F (1.0)
+
+GROUP Deps2
+NUGET
+  remote: https://nuget.org/api/v2
+  specs:
+    A (1.0)
+      B (1.0)
+    B (1.0)
+      D (1.0)
+    C (1.0)
+      E (1.0)
+    D (1.0)
+      E (1.0)
+    E (1.0)
+      F (1.0)
+    F (1.0)""" |> (fun x -> LockFile.Parse("", toLines x)) |> Some
+
+let depFile3 = """
+source http://nuget.org/api/v2
+
+nuget A 1.0
+nuget B 1.0
+nuget C 1.0
+nuget D 1.0
+nuget E 1.0
+nuget F 1.0
+
+group Deps2
+source http://nuget.org/api/v2
+
+nuget A 1.0
+nuget B 1.0
+nuget C 1.0
+nuget D 1.0
+nuget E 1.0
+nuget F 1.0""" |> DependenciesFile.FromCode
+
+let projects3 = [
+    ReferencesFile.FromLines [|"A";"B";"C";"D";"F"|]
+    ReferencesFile.FromLines [|"C";"D";"E"|] ] |> List.zip [dummyProjectFile; dummyProjectFile]
+
+[<Test>]
+let ``should remove all transitive dependencies from dep file with multiple groups``() =
+    let before = PaketEnv.create dummyDir depFile3 lockFile3 projects3
+    
+    match Simplifier.simplify false before with
+    | Chessie.ErrorHandling.Bad(msgs) -> 
+        failwith (String.concat Environment.NewLine (msgs |> List.map string))
+    | Chessie.ErrorHandling.Ok((_,after),_) ->
+        let depFile,refFiles = after.DependenciesFile, after.Projects |> List.map snd
+        depFile.Groups.[Constants.MainDependencyGroup].Packages |> List.map (fun p -> p.Name) |> shouldEqual [PackageName"A";PackageName"C"]
+        refFiles.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |>  shouldEqual [PackageInstallSettings.Default("A"); PackageInstallSettings.Default("C")]
+        refFiles.Tail.Head.Groups.[Constants.MainDependencyGroup].NugetPackages |>  shouldEqual [PackageInstallSettings.Default("C"); PackageInstallSettings.Default("D")]
+
+        let expected = """source http://nuget.org/api/v2
+
+nuget A 1.0
+nuget C 1.0
+
+group Deps2
 source http://nuget.org/api/v2
 
 nuget A 1.0
@@ -104,3 +188,4 @@ nuget C 1.0"""
 
         depFile.ToString()
         |> shouldEqual (normalizeLineEndings expected)
+

@@ -1,4 +1,30 @@
-#### 1.36.1 - 28.08.2015
+#### 2.2.1 - 17.09.2015
+* Allow to enable redirects per package - http://fsprojects.github.io/Paket/nuget-dependencies.html#redirects-settings
+* BUGFIX: Install command without a lockfile failed when using groups - https://github.com/fsprojects/Paket/issues/1067
+* BUGFIX: Only create packages.config entries for referenced packages - https://github.com/fsprojects/Paket/issues/1065
+
+#### 2.1.0 - 16.09.2015
+* Added support for custom internet proxy credentials with env vars - https://github.com/fsprojects/Paket/pull/1061
+* Removed microsoft.bcl.build.targets from backlist and instead changed "import_targets" default for that package
+* Fix handling of packages.config
+
+#### 2.0.0 - 15.09.2015
+* Support for `Dependency groups` in paket.dependencies files - http://fsprojects.github.io/Paket/groups.html
+* Support for Roslyn-based analyzers - http://fsprojects.github.io/Paket/analyzers.html
+* Support for reference conditions - https://github.com/fsprojects/Paket/issues/1026
+
+#### 1.39.10 - 13.09.2015
+* Fixed a bug where install and restore use different paths when specifying a project spec on a HTTP link - https://github.com/fsprojects/Paket/pull/1054
+* Fix parsing of output path when condition has no spaces - https://github.com/fsprojects/Paket/pull/1058
+
+#### 1.39.1 - 08.09.2015
+* Eagerly create app.config files and add to all projects - https://github.com/fsprojects/Paket/pull/1044
+
+#### 1.39.0 - 08.09.2015
+* New Bootstrapper with better handling of Paket prereleases
+
+#### 1.37.0 - 07.09.2015
+* Support for authentication and complex hosts for HTTP dependencies - https://github.com/fsprojects/Paket/pull/1052
 * Always redirect to the Redirect.Version - https://github.com/fsprojects/Paket/pull/1023
 * Improvements in the BootStrapper - https://github.com/fsprojects/Paket/pull/1022
 

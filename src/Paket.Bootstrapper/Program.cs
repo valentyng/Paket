@@ -3,6 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("Paket.Bootstrapper.Tests")]
 
 namespace Paket.Bootstrapper
 {
@@ -80,7 +83,7 @@ namespace Paket.Bootstrapper
                 }
                 else
                 {
-                    if (!localVersion.StartsWith(latestVersion))
+                    if (!localVersion.StartsWith(latestVersion, StringComparison.OrdinalIgnoreCase))
                     {
                         downloadStrategy.DownloadVersion(latestVersion, dlArgs.Target, silent);
                         if (!silent)

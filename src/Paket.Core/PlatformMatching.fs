@@ -136,7 +136,7 @@ let getTargetCondition (target:TargetProfile) =
         | XamarinMac -> "$(TargetFrameworkIdentifier) == 'Xamarin.Mac'", ""
     | PortableProfile(name, _) -> sprintf "$(TargetFrameworkProfile) == '%O'" name,""
 
-let getCondition (targets : TargetProfile list) =
+let getCondition (referenceCondition:string option) (targets : TargetProfile list) =
     let inline CheckIfFullyInGroup typeName matchF (processed,targets) =
         let fullyContained = 
             KnownTargetProfiles.AllProfiles 
@@ -182,3 +182,13 @@ let getCondition (targets : TargetProfile list) =
             | [] -> ""
             | [x] -> x
             | xs -> String.Join(" Or ", List.map (fun cs -> sprintf "(%s)" cs) xs)
+    |> fun s -> 
+        match referenceCondition with 
+        | None -> s
+        | Some condition ->
+            // msbuild triggers a warning MSB4130 when we leave out the quotes around the condition
+            // and add the condition at the end
+            if s = "$(TargetFrameworkIdentifier) == 'true'" then
+                sprintf "'$(%s)' == 'True'" condition
+            else
+                sprintf "'$(%s)' == 'True' And (%s)" condition s

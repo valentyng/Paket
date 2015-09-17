@@ -8,7 +8,7 @@ open Paket.Requirements
 
 type SingleSourceFileOrigin = 
 | GitHubLink 
-| GistLink 
+| GistLink
 | HttpLink of string
 
 // Represents details on a dependent source file.
@@ -22,7 +22,7 @@ type UnresolvedSourceFile =
     override this.ToString() =
         let name = if this.Name = Constants.FullProjectSourceFileName then "" else " " + this.Name
         match this.Origin with
-        | HttpLink url -> sprintf "http %s%s %s" url this.Commit.Value this.Name
+        | HttpLink url -> sprintf "http %s%s %s" url (defaultArg this.Commit "") this.Name
         | _ ->
             let link = 
                 match this.Origin with
@@ -42,11 +42,16 @@ type ResolvedSourceFile =
       Dependencies : Set<PackageName * VersionRequirement>
       Origin : SingleSourceFileOrigin }
 
-    member this.FilePath(root) = this.ComputeFilePath(root,this.Name)
+    member this.FilePath(root,groupName) = this.ComputeFilePath(root,groupName,this.Name)
     
-    member this.ComputeFilePath(root,name : string) = 
+    member this.ComputeFilePath(root,groupName:GroupName,name : string) = 
         let path = normalizePath (name.TrimStart('/'))
-        let di = DirectoryInfo(Path.Combine(root,Constants.PaketFilesFolderName, this.Owner, this.Project, path))
+        let dir = 
+            if groupName = Constants.MainDependencyGroup then
+                Path.Combine(root,Constants.PaketFilesFolderName, this.Owner, this.Project, path)
+            else
+                Path.Combine(root,Constants.PaketFilesFolderName, groupName.GetCompareString(), this.Owner, this.Project, path)
+        let di = DirectoryInfo(dir)
         di.FullName
     
     override this.ToString() = sprintf "%s/%s:%s %s" this.Owner this.Project this.Commit this.Name

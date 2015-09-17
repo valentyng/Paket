@@ -73,13 +73,15 @@ let add (results : ParseResults<_>) =
     let force = results.Contains <@ AddArgs.Force @>
     let hard = results.Contains <@ AddArgs.Hard @>
     let redirects = results.Contains <@ AddArgs.Redirects @>
+    let createNewBindingFiles = results.Contains <@ AddArgs.CreateNewBindingFiles @>
+    let group = results.TryGetResult <@ AddArgs.Group @>
     let noInstall = results.Contains <@ AddArgs.No_Install @>
     match results.TryGetResult <@ AddArgs.Project @> with
     | Some projectName ->
-        Dependencies.Locate().AddToProject(packageName, version, force, hard, projectName, noInstall |> not)
+        Dependencies.Locate().AddToProject(group, packageName, version, force, hard, redirects, createNewBindingFiles, projectName, noInstall |> not)
     | None ->
         let interactive = results.Contains <@ AddArgs.Interactive @>
-        Dependencies.Locate().Add(packageName, version, force, hard, interactive, noInstall |> not)
+        Dependencies.Locate().Add(group, packageName, version, force, hard, redirects, createNewBindingFiles, interactive, noInstall |> not)
 
 let validateConfig (results : ParseResults<_>) =
     if results.Contains <@ ConfigArgs.AddCredentials @> then
@@ -114,7 +116,9 @@ let convert (results : ParseResults<_>) =
 
 let findRefs (results : ParseResults<_>) =
     let packages = results.GetResults <@ FindRefsArgs.Packages @>
-    Dependencies.Locate().ShowReferencesFor(packages)
+    let group = defaultArg (results.TryGetResult <@ FindRefsArgs.Group @>) (Constants.MainDependencyGroup.ToString())
+    packages |> List.map (fun p -> group,p)
+    |> Dependencies.Locate().ShowReferencesFor
 
 let init (results : ParseResults<InitArgs>) =
     Dependencies.Init()
@@ -124,8 +128,9 @@ let install (results : ParseResults<_>) =
     let force = results.Contains <@ InstallArgs.Force @>
     let hard = results.Contains <@ InstallArgs.Hard @>
     let withBindingRedirects = results.Contains <@ InstallArgs.Redirects @>
+    let createNewBindingFiles = results.Contains <@ InstallArgs.CreateNewBindingFiles @>
     let installOnlyReferenced = results.Contains <@ InstallArgs.Install_Only_Referenced @>
-    Dependencies.Locate().Install(force, hard, withBindingRedirects, installOnlyReferenced)
+    Dependencies.Locate().Install(force, hard, withBindingRedirects, createNewBindingFiles, installOnlyReferenced)
 
 let outdated (results : ParseResults<_>) =
     let strict = results.Contains <@ OutdatedArgs.Ignore_Constraints @> |> not
@@ -137,20 +142,22 @@ let remove (results : ParseResults<_>) =
     let force = results.Contains <@ RemoveArgs.Force @>
     let hard = results.Contains <@ RemoveArgs.Hard @>
     let noInstall = results.Contains <@ RemoveArgs.No_Install @>
+    let group = results.TryGetResult <@ RemoveArgs.Group @>
     match results.TryGetResult <@ RemoveArgs.Project @> with
     | Some projectName ->
         Dependencies.Locate()
-                    .RemoveFromProject(packageName, force, hard, projectName, noInstall |> not)
+                    .RemoveFromProject(group, packageName, force, hard, projectName, noInstall |> not)
     | None ->
         let interactive = results.Contains <@ RemoveArgs.Interactive @>
-        Dependencies.Locate().Remove(packageName, force, hard, interactive, noInstall |> not)
+        Dependencies.Locate().Remove(group, packageName, force, hard, interactive, noInstall |> not)
 
 let restore (results : ParseResults<_>) =
     let force = results.Contains <@ RestoreArgs.Force @>
     let files = results.GetResults <@ RestoreArgs.References_Files @>
+    let group = results.TryGetResult <@ RestoreArgs.Group @>
     let installOnlyReferenced = results.Contains <@ RestoreArgs.Install_Only_Referenced @>
-    if List.isEmpty files then Dependencies.Locate().Restore(force, installOnlyReferenced)
-    else Dependencies.Locate().Restore(force, files)
+    if List.isEmpty files then Dependencies.Locate().Restore(force, group, installOnlyReferenced)
+    else Dependencies.Locate().Restore(force, group, files)
 
 let simplify (results : ParseResults<_>) =
     let interactive = results.Contains <@ SimplifyArgs.Interactive @>
@@ -160,11 +167,13 @@ let update (results : ParseResults<_>) =
     let hard = results.Contains <@ UpdateArgs.Hard @>
     let force = results.Contains <@ UpdateArgs.Force @>
     let noInstall = results.Contains <@ UpdateArgs.No_Install @>
+    let group = results.TryGetResult <@ UpdateArgs.Group @>
     let withBindingRedirects = results.Contains <@ UpdateArgs.Redirects @>
+    let createNewBindingFiles = results.Contains <@ UpdateArgs.CreateNewBindingFiles @>
     match results.TryGetResult <@ UpdateArgs.Nuget @> with
     | Some packageName ->
         let version = results.TryGetResult <@ UpdateArgs.Version @>
-        Dependencies.Locate().UpdatePackage(packageName, version, force, hard, withBindingRedirects, noInstall |> not)
+        Dependencies.Locate().UpdatePackage(group, packageName, version, force, hard, withBindingRedirects, createNewBindingFiles, noInstall |> not)
     | _ ->
         Dependencies.Locate().Update(force, hard, withBindingRedirects, noInstall |> not)
 
@@ -184,7 +193,8 @@ let findPackages (results : ParseResults<_>) =
     let sources  =
         match results.TryGetResult <@ FindPackagesArgs.Source @> with
         | Some source -> [PackageSource.NugetSource source]
-        | _ -> PackageSources.DefaultNugetSource :: Dependencies.Locate().GetSources()
+        | _ -> PackageSources.DefaultNugetSource :: 
+                (Dependencies.Locate().GetSources() |> Seq.map (fun kv -> kv.Value) |> List.concat)
 
     let searchAndPrint searchText =
         let result =
@@ -229,8 +239,8 @@ let getInstalledPackages (results : ParseResults<_>) =
             else dependenciesFile.GetDirectDependencies(referencesFile)
 
 let showInstalledPackages (results : ParseResults<_>) =
-    for name,version in getInstalledPackages results do
-        tracefn "%s - %s" name version
+    for groupName,name,version in getInstalledPackages results do  // TODO: Better grouping in reporting
+        tracefn "%s %s - %s" groupName name version
 
 let findPackageVersions (results : ParseResults<_>) =
     let maxResults = defaultArg (results.TryGetResult <@ FindPackageVersionsArgs.MaxResults @>) 10000

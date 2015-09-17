@@ -111,13 +111,14 @@ type SemVerInfo =
 
         sprintf "%d.%d.%d%s%s" x.Major x.Minor x.Patch build pre
 
-    member x.AsString = x.ToString()
-
     override x.ToString() = 
         match x.Original with
         | Some version -> version.Trim()
         | None -> x.Normalize()
     
+    member x.AsString
+        with get() = x.ToString()
+
     override x.Equals(yobj) = 
         match yobj with
         | :? SemVerInfo as y -> 

@@ -6,6 +6,7 @@ open System.IO
 open Paket.Logging
 open Paket.ModuleResolver
 open System.IO.Compression
+open Paket.Domain
 
 // Gets the sha1 of a branch
 let getSHA1OfBranch origin owner project branch = 
@@ -32,23 +33,29 @@ let private rawGistFileUrl owner project fileName =
     sprintf "https://gist.githubusercontent.com/%s/%s/raw/%s" owner project fileName
 
 /// Gets a dependencies file from the remote source and tries to parse it.
-let downloadDependenciesFile(rootPath,parserF,remoteFile:ModuleResolver.ResolvedSourceFile) = async {
+let downloadDependenciesFile(rootPath,groupName,parserF,remoteFile:ModuleResolver.ResolvedSourceFile) = async {
     let fi = FileInfo(remoteFile.Name)
 
     let dependenciesFileName = remoteFile.Name.Replace(fi.Name,Constants.DependenciesFileName)
 
-    let url = 
+    let auth, url = 
         match remoteFile.Origin with
         | ModuleResolver.GitHubLink -> 
-            rawFileUrl remoteFile.Owner remoteFile.Project remoteFile.Commit dependenciesFileName
+            None, rawFileUrl remoteFile.Owner remoteFile.Project remoteFile.Commit dependenciesFileName
         | ModuleResolver.GistLink -> 
-            rawGistFileUrl remoteFile.Owner remoteFile.Project dependenciesFileName
-        | ModuleResolver.HttpLink url -> url.Replace(remoteFile.Name,Constants.DependenciesFileName)
-    let! result = safeGetFromUrl(None,url,null)
+            None, rawGistFileUrl remoteFile.Owner remoteFile.Project dependenciesFileName
+        | ModuleResolver.HttpLink url -> 
+            let url = url.Replace(remoteFile.Name,Constants.DependenciesFileName)
+            let auth = 
+                ConfigFile.GetCredentialsForUrl remoteFile.Project url
+                |> Option.map (fun (un, pwd) -> { Username = un; Password = pwd })
+            auth, url
+
+    let! result = safeGetFromUrl(auth,url,null)
 
     match result with
     | Some text when parserF text ->        
-        let destination = remoteFile.ComputeFilePath(rootPath,dependenciesFileName)
+        let destination = remoteFile.ComputeFilePath(rootPath,groupName,dependenciesFileName)
 
         Directory.CreateDirectory(destination |> Path.GetDirectoryName) |> ignore
         File.WriteAllText(destination, text)
@@ -117,7 +124,10 @@ let downloadRemoteFiles(remoteFile:ResolvedSourceFile,destination) = async {
         return! downloadFromUrl(None,rawFileUrl remoteFile.Owner remoteFile.Project remoteFile.Commit remoteFile.Name) destination
     | SingleSourceFileOrigin.HttpLink(origin), _ ->
         let url = origin + remoteFile.Commit
-        do! downloadFromUrl(None, url) destination
+        let auth =
+            ConfigFile.GetCredentialsForUrl remoteFile.Project url
+            |> Option.map (fun (un, pwd) -> { Username = un; Password = pwd })
+        do! downloadFromUrl(auth, url) destination
         match Path.GetExtension(destination).ToLowerInvariant() with
         | ".zip" ->
             let targetFolder = FileInfo(destination).Directory.FullName
@@ -125,10 +135,10 @@ let downloadRemoteFiles(remoteFile:ResolvedSourceFile,destination) = async {
         | _ -> ignore()
 }
 
-let DownloadSourceFiles(rootPath, force, sourceFiles:ModuleResolver.ResolvedSourceFile list) =
+let DownloadSourceFiles(rootPath, groupName, force, sourceFiles:ModuleResolver.ResolvedSourceFile list) =
     sourceFiles
     |> List.map (fun source ->
-        let destination = source.FilePath(rootPath)
+        let destination = source.FilePath(rootPath,groupName)
         let destinationDir = FileInfo(destination).Directory.FullName
 
         (destinationDir, source.Commit), (destination, source))
@@ -156,9 +166,9 @@ let DownloadSourceFiles(rootPath, force, sourceFiles:ModuleResolver.ResolvedSour
                                 File.Exists destination
 
                         if not force && exists then
-                            verbosefn "Sourcefile %s is already there." (source.ToString())
+                            verbosefn "Sourcefile %O is already there." source
                         else 
-                            tracefn "Downloading %s to %s" (source.ToString()) destination
+                            tracefn "Downloading %O to %s" source destination
                             do! downloadRemoteFiles(source,destination)
                     })
                 |> Async.Parallel

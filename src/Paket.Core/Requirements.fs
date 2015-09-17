@@ -17,7 +17,7 @@ type FrameworkRestriction =
         | FrameworkRestriction.Exactly r -> r.ToString()
         | FrameworkRestriction.Portable r -> r
         | FrameworkRestriction.AtLeast r -> ">= " + r.ToString()
-        | FrameworkRestriction.Between(min,max) -> sprintf ">= %s < %s" (min.ToString()) (max.ToString())
+        | FrameworkRestriction.Between(min,max) -> sprintf ">= %O < %O" min max
 
 type FrameworkRestrictions = FrameworkRestriction list
 
@@ -126,6 +126,8 @@ type InstallSettings =
       FrameworkRestrictions: FrameworkRestrictions
       OmitContent : bool option
       IncludeVersionInPath: bool option
+      ReferenceCondition : string option
+      CreateBindingRedirects : bool option
       CopyLocal : bool option }
 
     static member Default =
@@ -133,6 +135,8 @@ type InstallSettings =
           ImportTargets = None
           FrameworkRestrictions = []
           IncludeVersionInPath = None
+          ReferenceCondition = None
+          CreateBindingRedirects = None
           OmitContent = None }
 
     member this.ToString(asLines) =
@@ -150,6 +154,13 @@ type InstallSettings =
               match this.IncludeVersionInPath with
               | Some x -> yield "version_in_path: " + x.ToString().ToLower()
               | None -> ()
+              match this.ReferenceCondition with
+              | Some x -> yield "condition: " + x.ToUpper()
+              | None -> ()
+              match this.CreateBindingRedirects with
+              | Some true -> yield "redirects: on"
+              | Some false -> yield "redirects: off"
+              | None -> ()
               match this.FrameworkRestrictions with
               | [] -> ()
               | _  -> yield "framework: " + (String.Join(", ",this.FrameworkRestrictions))]
@@ -166,6 +177,7 @@ type InstallSettings =
                 FrameworkRestrictions = (self.FrameworkRestrictions @ other.FrameworkRestrictions) |> Seq.ofList |> Seq.distinct |> List.ofSeq
                 OmitContent = self.OmitContent ++ other.OmitContent
                 CopyLocal = self.CopyLocal ++ other.CopyLocal
+                ReferenceCondition = self.ReferenceCondition ++ other.ReferenceCondition
                 IncludeVersionInPath = self.IncludeVersionInPath ++ other.IncludeVersionInPath
         }
 
@@ -186,10 +198,19 @@ type InstallSettings =
             | true, "none" -> Some true 
             | true, "true" -> Some false 
             | _ ->  None
+          CreateBindingRedirects =
+            match kvPairs.TryGetValue "redirects" with
+            | true, "on" -> Some true 
+            | true, "off" -> Some false 
+            | _ ->  None
           IncludeVersionInPath =         
             match kvPairs.TryGetValue "version_in_path" with
             | true, "false" -> Some false 
             | true, "true" -> Some true
+            | _ -> None 
+          ReferenceCondition =         
+            match kvPairs.TryGetValue "condition" with
+            | true, c -> Some(c.ToUpper())
             | _ -> None 
           CopyLocal =         
             match kvPairs.TryGetValue "copy_local" with
@@ -235,8 +256,7 @@ type PackageRequirementSource =
         match this with
         | DependenciesFile x -> x
         | Package(name,version) ->
-          sprintf "%s %s" (name.ToString()) (version.ToString())
-
+          sprintf "%O %O" name version
 
 /// Represents an unresolved package.
 [<CustomEquality;CustomComparison>]
@@ -254,8 +274,7 @@ type PackageRequirement =
         | _ -> false
 
     override this.ToString() =
-        let (PackageName name) = this.Name
-        sprintf "%s %s (from %s)" name (this.VersionRequirement.ToString()) (this.Parent.ToString())
+        sprintf "%O %O (from %O)" this.Name this.VersionRequirement this.Parent
 
     override this.GetHashCode() = hash (this.Name,this.VersionRequirement)
 

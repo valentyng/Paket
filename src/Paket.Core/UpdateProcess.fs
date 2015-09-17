@@ -8,47 +8,9 @@ open Paket.PackageResolver
 open System.Collections.Generic
 open Chessie.ErrorHandling
 open Paket.Logging
-open Paket.Requirements
-
-let addPackagesFromReferenceFiles projects (dependenciesFile : DependenciesFile) =
-    let lockFileName = DependenciesFile.FindLockfile dependenciesFile.FileName
-    let oldLockFile =
-        if lockFileName.Exists then
-            LockFile.LoadFrom(lockFileName.FullName)
-        else
-            LockFile.Create(lockFileName.FullName, dependenciesFile.Options, Resolution.Ok(Map.empty), [])
-
-    let allExistingPackages =
-        oldLockFile.ResolvedPackages
-        |> Seq.map (fun d -> NormalizedPackageName d.Value.Name)
-        |> Set.ofSeq
-
-    let allReferencedPackages =
-        projects
-        |> Seq.collect (fun (_,referencesFile) -> referencesFile.NugetPackages)
-
-    let diff =
-        allReferencedPackages
-        |> Seq.filter (fun p ->
-            NormalizedPackageName p.Name
-            |> allExistingPackages.Contains
-            |> not)
-
-    if Seq.isEmpty diff then
-        dependenciesFile
-    else
-        let newDependenciesFile =
-            diff
-            |> Seq.fold (fun (dependenciesFile:DependenciesFile) dep ->
-                if dependenciesFile.HasPackage dep.Name then
-                    dependenciesFile
-                else
-                    dependenciesFile.AddAdditionalPackage(dep.Name,"",dep.Settings)) dependenciesFile
-        newDependenciesFile.Save()
-        newDependenciesFile
 
 type UpdateMode =
-    | SelectiveUpdate of NormalizedPackageName
+    | SelectiveUpdate of GroupName * PackageName
     | Install
     | UpdateAll
 
@@ -58,28 +20,52 @@ type UpdateMode =
         else
             match package with
             | None -> Install
-            | Some package -> SelectiveUpdate package
+            | Some(groupName,package) -> SelectiveUpdate(groupName,package)
 
-let selectiveUpdate resolve lockFile dependenciesFile updateAll package =
-    let install () =
-        let changedDependencies = DependencyChangeDetection.findChangesInDependenciesFile(dependenciesFile,lockFile)
-        let dependenciesFile = DependencyChangeDetection.PinUnchangedDependencies dependenciesFile lockFile changedDependencies
-        resolve dependenciesFile None
+let selectiveUpdate resolve (lockFile:LockFile) (dependenciesFile:DependenciesFile) updateAll package =
+    let resolve (dependenciesFile : DependenciesFile) packages = 
+        let groups =
+            package
+            |> Option.fold
+                (fun groups (groupName,_) ->
+                    groups |> Map.filter (fun g _ -> g = groupName))
+                dependenciesFile.Groups
 
-    let selectiveUpdate package =
-        let selectiveResolution = 
-            dependenciesFile.Packages
-            |> List.filter (fun p -> package = NormalizedPackageName p.Name)
-            |> Some
-            |> resolve dependenciesFile
+        groups
+        |> Map.map (fun groupName group ->
+            { Name = group.Name
+              RemoteFiles = group.RemoteFiles
+              RootDependencies = packages
+              FrameworkRestrictions = group.Options.Settings.FrameworkRestrictions
+              PackageRequirements = 
+                match package with
+                | Some(currentGroup,packageName) when groupName = currentGroup -> 
+                    lockFile.Groups
+                    |> Map.filter (fun g _ -> g = groupName)
+                    |> Seq.map (fun kv -> kv.Value.Resolution)
+                    |> Seq.map (createPackageRequirements [packageName])
+                    |> Seq.concat
+                    |> List.ofSeq
+                | _ -> [] })
+        |> resolve dependenciesFile
+
+    let selectiveUpdate (group : LockFileGroup) package =        
+        let selectiveResolution : Map<GroupName,Resolved> = 
+            match dependenciesFile.Groups.TryFind group.Name with
+            | Some group -> 
+                group.Packages
+                |> List.filter (fun p -> package = p.Name)
+                |> Some
+                |> resolve dependenciesFile
+            | None -> failwithf "Group %O does not exist" group.Name
 
         let merge destination source = 
             Map.fold (fun acc key value -> Map.add key value acc) destination source
 
         let resolution =    
             let resolvedPackages = 
-                selectiveResolution.ResolvedPackages.GetModelOrFail()
-                |> merge lockFile.ResolvedPackages
+                (selectiveResolution |> Map.find group.Name).ResolvedPackages.GetModelOrFail()
+                |> merge group.Resolution
 
             let dependencies = 
                 resolvedPackages
@@ -88,25 +74,58 @@ let selectiveUpdate resolve lockFile dependenciesFile updateAll package =
                 |> Set.ofSeq
 
             let isDirectDependency package = 
-                dependenciesFile.DirectDependencies
-                |> Map.exists (fun p _ -> NormalizedPackageName p = package)
+                dependenciesFile.GetDependenciesInGroup(group.Name)
+                |> Map.exists (fun p _ -> p = package)
 
             let isTransitiveDependency package =
                 dependencies
-                |> Set.exists (fun p -> NormalizedPackageName p = package)
+                |> Set.exists (fun p -> p = package)
 
             resolvedPackages
             |> Map.filter (fun p _ -> isDirectDependency p || isTransitiveDependency p)
 
-        { ResolvedPackages = Resolution.Ok(resolution); ResolvedSourceFiles = lockFile.SourceFiles }
+        { ResolvedPackages = Resolution.Ok resolution
+          ResolvedSourceFiles = group.RemoteFiles }
 
     let resolution =
         match UpdateMode.Mode updateAll package with
         | UpdateAll -> resolve dependenciesFile None
-        | Install -> install ()
-        | SelectiveUpdate p -> selectiveUpdate p
+        | Install ->
+            let dependenciesFile = 
+                DependencyChangeDetection.findChangesInDependenciesFile(dependenciesFile,lockFile)
+                |> DependencyChangeDetection.PinUnchangedDependencies dependenciesFile lockFile
+            resolve dependenciesFile None
+        | SelectiveUpdate(groupName,package) -> 
+            let lockFileGroup = 
+                lockFile.Groups
+                |> Map.filter (fun g _ -> g = groupName)
+                |> Seq.map (fun kv -> kv.Value)
+                |> Seq.tryHead
+            
+            let lockFileGroup =
+                match lockFileGroup with
+                | Some g -> g
+                | None ->
+                    { Name = groupName
+                      Options = InstallOptions.Default
+                      Resolution = Map.empty
+                      RemoteFiles = List.empty }
 
-    LockFile(lockFile.FileName, dependenciesFile.Options, resolution.ResolvedPackages.GetModelOrFail(), resolution.ResolvedSourceFiles)
+            lockFile.Groups
+            |> Map.map (fun _ group ->
+                { ResolvedPackages = Resolution.Ok group.Resolution
+                  ResolvedSourceFiles = group.RemoteFiles })
+            |> Map.add groupName (selectiveUpdate lockFileGroup package)
+
+    let groups = 
+        resolution
+        |> Map.map (fun groupName group -> 
+                { Name = dependenciesFile.Groups.[groupName].Name
+                  Options = dependenciesFile.Groups.[groupName].Options
+                  Resolution = group.ResolvedPackages.GetModelOrFail()
+                  RemoteFiles = group.ResolvedSourceFiles })
+    
+    LockFile(lockFile.FileName, groups)
 
 let SelectiveUpdate(dependenciesFile : DependenciesFile, updateAll, exclude, force) =
     let lockFileName = DependenciesFile.FindLockfile dependenciesFile.FileName
@@ -116,38 +135,22 @@ let SelectiveUpdate(dependenciesFile : DependenciesFile, updateAll, exclude, for
         else
             LockFile.LoadFrom lockFileName.FullName
 
-    let requirements =
-        match exclude with
-        | Some e -> 
-            oldLockFile.ResolvedPackages
-            |> createPackageRequirements [e]
-        | None -> []
+    let skipVersions f (sources,packageName,vr) =
+        match vr with
+        | Specific v
+        | OverrideAll v -> [v]
+        | _ -> f (sources,packageName,vr)
 
-    let skipVersions packages f (sources,packageName) =
-        let v p =
-            match p.VersionRequirement.Range with
-            | Specific v
-            | OverrideAll v -> [v]
-            | _ -> []
-
-        let versions =
-            packages
-            |> List.filter (fun p -> NormalizedPackageName p.Name = NormalizedPackageName packageName)
-            |> List.map v
-            |> List.concat
-            |> List.distinct
-
-        match versions with
-        | [] -> f (sources,packageName)
-        | l -> l
-
-    let getVersion pr =
+    let getVersion f =
         match UpdateMode.Mode updateAll exclude with
-        | UpdateAll -> id
-        | SelectiveUpdate _ -> id
-        | Install -> skipVersions pr
+        | UpdateAll -> f
+        | SelectiveUpdate _ -> f
+        | Install -> skipVersions f
 
-    let lockFile = selectiveUpdate (fun d p -> d.Resolve(getVersion, force, p, requirements)) oldLockFile dependenciesFile updateAll exclude
+    let getSha1 origin owner repo branch = RemoteDownload.getSHA1OfBranch origin owner repo branch |> Async.RunSynchronously
+    let root = Path.GetDirectoryName dependenciesFile.FileName
+
+    let lockFile = selectiveUpdate (fun d g -> d.Resolve(getSha1,(fun (x,y,_) -> NuGetV2.GetVersions root (x,y)) |> getVersion,NuGetV2.GetPackageDetails root force,g)) oldLockFile dependenciesFile updateAll exclude
     lockFile.Save()
     lockFile
 
@@ -159,27 +162,23 @@ let SmartInstall(dependenciesFile, updateAll, exclude, options : UpdaterOptions)
     let projects = InstallProcess.findAllReferencesFiles root |> returnOrFail
 
     if not options.NoInstall then
-        InstallProcess.InstallIntoProjects(
-            dependenciesFile.GetAllPackageSources(),
-            options.Common, lockFile, projects)
+        InstallProcess.InstallIntoProjects(options.Common, dependenciesFile, lockFile, projects)
 
 /// Update a single package command
-let UpdatePackage(dependenciesFileName, packageName : PackageName, newVersion, options : UpdaterOptions) =
+let UpdatePackage(dependenciesFileName, groupName, packageName : PackageName, newVersion, options : UpdaterOptions) =
     let dependenciesFile = DependenciesFile.ReadFromFile(dependenciesFileName)
 
-    if not <| dependenciesFile.HasPackage(packageName) then
-        packageName
-        |> string
-        |> failwithf "Package %s was not found in paket.dependencies."
+    if not <| dependenciesFile.HasPackage(groupName, packageName) then
+        failwithf "Package %O was not found in paket.dependencies in group %O." packageName groupName
 
     let dependenciesFile =
         match newVersion with
-        | Some v -> dependenciesFile.UpdatePackageVersion(packageName, v)
+        | Some v -> dependenciesFile.UpdatePackageVersion(groupName,packageName, v)
         | None -> 
-            tracefn "Updating %s in %s" (packageName.ToString()) dependenciesFileName
+            tracefn "Updating %O in %s group %O" packageName dependenciesFileName groupName
             dependenciesFile
 
-    SmartInstall(dependenciesFile, false, Some(NormalizedPackageName packageName), options)
+    SmartInstall(dependenciesFile, false, Some(groupName,packageName), options)
 
 /// Update command
 let Update(dependenciesFileName, options : UpdaterOptions) =
